@@ -82,6 +82,6 @@ pref("image.mem.surfacecache.max_size_kb", 524288);
 pref("browser.tabs.unloadOnLowMemory", true);
 
 // Patrium: updates (GitHub releases of patrium.update.repo, e.g. "owner/patrium")
-pref("patrium.version", "0.1.0");
+pref("patrium.version", "0.1.1");
 pref("patrium.update.enabled", true);
 pref("patrium.update.repo", "xreamm1/patrium-browser");

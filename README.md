@@ -1,4 +1,18 @@
 <p align="center">
+  🇷🇺 <b>Русский</b> | 🇬🇧 <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/xreamm1/patrium-browser/releases/latest"><img src="https://img.shields.io/github/v/release/xreamm1/patrium-browser?style=for-the-badge&label=release&color=0A6CFF" alt="Release"></a>
+  <img src="https://img.shields.io/badge/platform-windows%2010%20%7C%2011-0078D6?style=for-the-badge" alt="Windows 10 | 11">
+  <img src="https://img.shields.io/badge/engine-gecko%20160-E66000?style=for-the-badge" alt="Gecko 160">
+  <img src="https://img.shields.io/badge/adblock-rust-B7410E?style=for-the-badge" alt="Rust adblock">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/xreamm1/patrium-browser?style=for-the-badge&color=4CAF50" alt="License"></a>
+  <a href="https://github.com/xreamm1/patrium-browser/releases"><img src="https://img.shields.io/github/downloads/xreamm1/patrium-browser/total?style=for-the-badge&color=7C4DFF" alt="Downloads"></a>
+  <a href="https://github.com/xreamm1/patrium-browser/stargazers"><img src="https://img.shields.io/github/stars/xreamm1/patrium-browser?style=for-the-badge&color=E3B341" alt="Stars"></a>
+</p>
+
+<p align="center">
   <img src="docs/icon.png" width="128" alt="Patrium">
 </p>
 
@@ -10,7 +24,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/xreamm1/patrium-browser/releases/latest"><b>Скачать последнюю версию</b></a>
+  <a href="https://github.com/xreamm1/patrium-browser/releases/latest"><b>⬇️ Скачать последнюю версию</b></a>
 </p>
 
 ---
@@ -48,7 +62,7 @@
 
 ## Установка
 
-1. Скачайте `Patrium-Setup-RU.exe` (или `-EN`) из [релизов](https://github.com/xreamm1/patrium-browser/releases/latest).
+1. Скачайте `Patrium-Setup-<версия>-ru-x64.exe` (или `-en-x64` для английского интерфейса) из [релизов](https://github.com/xreamm1/patrium-browser/releases/latest).
 2. Запустите. Установщик не подписан цифровой подписью, поэтому Windows SmartScreen может предупредить: *Подробнее → Выполнить в любом случае*.
 
 Требования: Windows 10/11 x64.
@@ -87,12 +101,6 @@ powershell -ExecutionPolicy Bypass -File tools\mach.ps1 package
 | `branding-src/privacy-prefs.js` | Настройки Patrium по умолчанию |
 | `l10n/ru/` | Русский перевод интерфейса Patrium |
 | `tools/` | Брендинг, иконки, запуск mach, автотесты через Marionette |
-
----
-
-## English
-
-**Patrium** is a privacy-focused Windows browser built on Firefox (Gecko) with a native Rust ad/tracker blocker (adblock-rust), a one-click Tor VPN with bridges, a zapret (DPI bypass) Windows service toggle, aggressive memory savings and GitHub-based auto-updates. Download from [Releases](https://github.com/xreamm1/patrium-browser/releases/latest). Build instructions are above.
 
 ## Лицензия
 

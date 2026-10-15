@@ -96,10 +96,12 @@ export const PatriumUpdater = {
     const installers = release.assets.filter(
       a => /\.exe$/i.test(a.name) && a.digest?.startsWith("sha256:")
     );
-    const isX64 = a => /x64|x86_64|win64|amd64/i.test(a.name);
     const isOtherArch = a => /arm64|aarch64|x86(?!_64)|win32|i686/i.test(a.name);
-    const asset =
-      installers.find(isX64) ?? installers.find(a => !isOtherArch(a));
+    const candidates = installers.filter(a => !isOtherArch(a));
+    // Release assets are named like Patrium-Setup-1.2.3-ru-x64.exe.
+    const lang = Services.locale.appLocaleAsBCP47.split("-")[0].toLowerCase();
+    const forLang = l => candidates.find(a => new RegExp(`[-_.]${l}[-_.]`, "i").test(a.name));
+    const asset = forLang(lang) ?? forLang("en") ?? candidates[0];
     if (!asset) {
       console.warn(`Patrium: release ${version} has no verifiable installer`);
       return null;

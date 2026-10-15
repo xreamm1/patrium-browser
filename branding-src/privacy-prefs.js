@@ -85,3 +85,6 @@ pref("browser.tabs.unloadOnLowMemory", true);
 pref("patrium.version", "0.1.1");
 pref("patrium.update.enabled", true);
 pref("patrium.update.repo", "xreamm1/patrium-browser");
+
+// Patrium: GitHub repo pinned as a default new-tab tile
+pref("browser.newtabpage.pinned", "[{\"url\":\"https://github.com/xreamm1/patrium-browser\",\"label\":\"Patrium on GitHub\"}]");

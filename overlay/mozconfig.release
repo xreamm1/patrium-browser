@@ -1,9 +1,9 @@
-# Patrium release build: PGO + cross-language ThinLTO.
+# Patrium release build: PGO + C++ ThinLTO (cross-lang LTO off: rustc/clang LLVM versions differ).
 # Usage (MozillaBuild shell): MOZCONFIG=mozconfig.release ./mach build
 . "$topsrcdir/mozconfig"
 
 ac_add_options --enable-release
-ac_add_options --enable-lto=cross
+ac_add_options --enable-lto=thin
 export MOZ_PGO=1
 
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-patrium-release
@@ -12,4 +12,3 @@ mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-patrium-release
 # final xul.dll link does not run out of memory.
 mk_add_options MOZ_PARALLEL_BUILD=4
 export LDFLAGS="$LDFLAGS /opt:lldltojobs=4"
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1

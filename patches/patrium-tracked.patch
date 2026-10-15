@@ -1,4 +1,4 @@
-﻿diff --git a/Cargo.lock b/Cargo.lock
+diff --git a/Cargo.lock b/Cargo.lock
 index 641657d7ef..71a4977e02 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
@@ -134,16 +134,17 @@ index d3c393ccf2..c7f1131f98 100644
  category browser-before-ui-startup moz-src:///browser/components/AccountsGlue.sys.mjs AccountsGlue.init
  category browser-before-ui-startup moz-src:///browser/modules/ObserverForwarder.sys.mjs ObserverForwarder.init
 diff --git a/browser/components/customizableui/CustomizableUI.sys.mjs b/browser/components/customizableui/CustomizableUI.sys.mjs
-index fe610cdf79..56aff559ee 100644
+index fe610cdf79..cb504eb1e9 100644
 --- a/browser/components/customizableui/CustomizableUI.sys.mjs
 +++ b/browser/components/customizableui/CustomizableUI.sys.mjs
-@@ -370,6 +370,9 @@ var CustomizableUIInternal = {
+@@ -370,6 +370,10 @@ var CustomizableUIInternal = {
        "urlbar-container",
        "spring",
        "downloads-button",
 +      "patrium-adblock-button",
 +      "patrium-tor-button",
 +      "patrium-zapret-button",
++      "patrium-history-button",
        AppConstants.MOZ_DEV_EDITION ? "developer-button" : null,
        lazy.ippEnabled ? "ipprotection-button" : null,
        "fxa-toolbar-menu-button",
@@ -215,6 +216,35 @@ index 8e0c6483d6..2f0ce82da6 100644
    <link rel="localization" href="toolkit/branding/brandings.ftl"/>
    <link rel="localization" href="toolkit/firefoxlabs/features.ftl"/>
    <link rel="localization" href="toolkit/global/mozPageHeader.ftl"/>
+diff --git a/browser/extensions/newtab/content-src/components/Base/Base.jsx b/browser/extensions/newtab/content-src/components/Base/Base.jsx
+index 5f88eeb886..32f7097db5 100644
+--- a/browser/extensions/newtab/content-src/components/Base/Base.jsx
++++ b/browser/extensions/newtab/content-src/components/Base/Base.jsx
+@@ -5,6 +5,7 @@
+ import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
+ import { DiscoveryStreamAdmin } from "content-src/components/DiscoveryStreamAdmin/DiscoveryStreamAdmin";
+ import { ConfirmDialog } from "content-src/components/ConfirmDialog/ConfirmDialog";
++import { PatriumEdit } from "content-src/components/PatriumEdit/PatriumEdit";
+ import { connect } from "react-redux";
+ import { DiscoveryStreamBase } from "content-src/components/DiscoveryStreamBase/DiscoveryStreamBase";
+ import { ErrorBoundary } from "content-src/components/ErrorBoundary/ErrorBoundary";
+@@ -126,6 +127,7 @@ export function _Base(props) {
+       ) : (
+         <BaseContent {...props} />
+       )}
++      <PatriumEdit />
+     </ErrorBoundary>
+   );
+ }
+diff --git a/browser/extensions/newtab/content-src/styles/activity-stream.scss b/browser/extensions/newtab/content-src/styles/activity-stream.scss
+index c88f92bdef..4c315ecf87 100644
+--- a/browser/extensions/newtab/content-src/styles/activity-stream.scss
++++ b/browser/extensions/newtab/content-src/styles/activity-stream.scss
+@@ -249,3 +249,4 @@ panel-list:not(:defined) {
+ @import '../components/Widgets/WidgetsRowAd';
+ 
+ // stylelint-enable no-invalid-position-at-import-rule
++@import '../components/PatriumEdit/PatriumEdit';
 diff --git a/browser/installer/windows/nsis/uninstaller.nsi b/browser/installer/windows/nsis/uninstaller.nsi
 index 7a39e2f813..8b1edab49e 100755
 --- a/browser/installer/windows/nsis/uninstaller.nsi

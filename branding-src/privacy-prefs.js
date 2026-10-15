@@ -82,9 +82,16 @@ pref("image.mem.surfacecache.max_size_kb", 524288);
 pref("browser.tabs.unloadOnLowMemory", true);
 
 // Patrium: updates (GitHub releases of patrium.update.repo, e.g. "owner/patrium")
-pref("patrium.version", "0.1.1");
+pref("patrium.version", "0.1.2");
 pref("patrium.update.enabled", true);
 pref("patrium.update.repo", "xreamm1/patrium-browser");
 
 // Patrium: GitHub repo pinned as a default new-tab tile
 pref("browser.newtabpage.pinned", "[{\"url\":\"https://github.com/xreamm1/patrium-browser\",\"label\":\"Patrium on GitHub\"}]");
+
+// Patrium: quick history clear list
+pref("patrium.history.quickClearHosts", "[]");
+
+// Patrium: allow installing unsigned (unverified) extensions permanently
+pref("xpinstall.signatures.required", false);
+pref("extensions.langpacks.signatures.required", false);

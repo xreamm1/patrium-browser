@@ -1,0 +1,65 @@
+// Patrium: new tab edit mode (pencil FAB + iPhone-style wiggle)
+
+@keyframes patrium-jiggle {
+  0% { transform: rotate(-1.1deg); }
+  50% { transform: rotate(1.1deg); }
+  100% { transform: rotate(-1.1deg); }
+}
+
+.patrium-edit-fab {
+  position: fixed;
+  inset-block-end: 20px;
+  inset-inline-end: 20px;
+  z-index: 100;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background-color: var(--newtab-primary-action-background, #0a6cff);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+
+  &:hover { transform: scale(1.08); }
+  &.active { background-color: #d13438; }
+
+  .patrium-edit-fab-icon {
+    width: 20px;
+    height: 20px;
+    background-color: #fff;
+    mask: url("chrome://global/skin/icons/edit.svg") no-repeat center / 20px;
+    -webkit-mask: url("chrome://global/skin/icons/edit.svg") no-repeat center / 20px;
+  }
+  &.active .patrium-edit-fab-icon {
+    mask-image: url("chrome://global/skin/icons/close.svg");
+    -webkit-mask-image: url("chrome://global/skin/icons/close.svg");
+  }
+}
+
+html.patrium-editing {
+  // Everything the user can rearrange or remove wiggles.
+  .top-site-outer,
+  .widgets-wrapper > *,
+  .widgets-section-container > * {
+    animation: patrium-jiggle 0.3s ease-in-out infinite;
+    transform-origin: center;
+  }
+
+  // Stagger alternate tiles so they don't wiggle in lockstep.
+  .top-site-outer:nth-child(even),
+  .widgets-wrapper > :nth-child(even) {
+    animation-delay: 0.15s;
+    animation-direction: alternate-reverse;
+  }
+
+  // Keep the per-tile menu (Dismiss / Pin / Edit) always visible while editing,
+  // so a site can be removed or moved in one tap. Dragging already works.
+  .top-site-outer .context-menu-button,
+  .widgets-header-context-menu-button {
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+}

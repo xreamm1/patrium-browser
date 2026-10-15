@@ -107,3 +107,6 @@ Note: `tools\mach.ps1` and `tools\apply-branding.ps1` expect the project in `C:\
 [Mozilla Public License 2.0](LICENSE), like Firefox. Third-party components are listed in [NOTICE.md](NOTICE.md).
 
 Patrium is not affiliated with the Mozilla Foundation. Firefox is a trademark of the Mozilla Foundation.
+
+> Правка стартовой страницы (newtab): после изменений в `overlay/browser/extensions/newtab/content-src` выполните `tools
+ewtab-bundle.ps1` (нужен один раз `npm install --ignore-scripts` в этой папке), затем обычную сборку.

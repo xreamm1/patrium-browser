@@ -107,3 +107,6 @@ powershell -ExecutionPolicy Bypass -File tools\mach.ps1 package
 [Mozilla Public License 2.0](LICENSE), как и у Firefox. Сторонние компоненты — в [NOTICE.md](NOTICE.md).
 
 Patrium не связан с Mozilla Foundation. Firefox — товарный знак Mozilla Foundation.
+
+> Правка стартовой страницы (newtab): после изменений в `overlay/browser/extensions/newtab/content-src` выполните `tools
+ewtab-bundle.ps1` (нужен один раз `npm install --ignore-scripts` в этой папке), затем обычную сборку.

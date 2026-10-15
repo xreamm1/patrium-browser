@@ -34,7 +34,7 @@ patrium-zapret-install-confirm-text = Patrium скачает последний 
 ## Patrium: Tor toolbar button and panel
 
 patrium-tor-button =
-    .label = VPN
+    .label = Tor
     .tooltiptext = VPN (Tor)
 patrium-tor-panel-header =
     .title = VPN (Tor)
@@ -108,3 +108,16 @@ patrium-update-later = Позже
 patrium-update-skip = Пропустить эту версию
 patrium-update-downloading = Загрузка обновления Patrium…
 patrium-update-failed = Не удалось скачать обновление: { $error }
+## Patrium: quick history clear
+
+patrium-history-button =
+    .label = Очистка истории
+    .tooltiptext = Быстрое удаление выбранных сайтов из истории
+patrium-history-panel-header =
+    .title = Быстрая очистка истории
+patrium-history-note = Отметьте сайты, которые хотите удалять, и очищайте их из истории в одну кнопку в любой момент.
+patrium-history-empty = История пуста.
+patrium-history-clear-button =
+    .label = Очистить отмеченные сайты из истории
+patrium-history-confirm-title = Очистить историю?
+patrium-history-confirm-text = Удалить всю историю для выбранных сайтов ({ $count }), включая поддомены?

@@ -139,6 +139,11 @@ class ServiceWidget {
     const view = event.target;
     this.buildBody(view);
     view.addEventListener("command", this);
+    // Only re-check when showing a stale "external" (another winws that may
+    // have since exited); never during busy/error, to avoid wiping that state.
+    if (this.service.refresh && this.service.state == "external") {
+      await this.service.refresh().catch(() => {});
+    }
     await this.fillOptions(view);
     this.updatePanel(view);
   }
@@ -245,17 +250,27 @@ class ServiceWidget {
     }
 
     const installed = state != "missing" && state != "installing";
+    // Only lock while a tracked operation is in flight. "starting" alone is
+    // not locked for services without a busy flag (e.g. Tor), so the user can
+    // still cancel a stuck connection.
     const busy =
-      this.service.busy ||
-      ["installing", "starting", "stopping"].includes(state);
+      (this.service.busy ?? false) ||
+      ["installing", "stopping"].includes(state);
     const locked = busy || state == "external";
     view.querySelector(`#${p}-install`).hidden = installed;
     view.querySelector(`#${p}-install`).disabled = busy;
 
     const toggle = view.querySelector(`#${p}-toggle`);
     toggle.hidden = !installed;
-    toggle.disabled = locked;
-    const isOn = state == "on" || state == "starting";
+    // Disable only while a tracked operation runs (busy) or another winws is
+    // detected; never while "starting", so a stuck connection can be cancelled.
+    toggle.disabled =
+      (this.service.busy ?? false) ||
+      state == "installing" ||
+      state == "external";
+    // "routing" covers a failed-closed service that still needs tearing down.
+    const isOn =
+      state == "on" || state == "starting" || this.service.routing;
     doc.l10n.setAttributes(
       toggle,
       isOn ? `${p}-turn-off-button` : `${p}-turn-on-button`

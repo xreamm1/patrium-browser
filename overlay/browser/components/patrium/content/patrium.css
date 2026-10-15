@@ -91,3 +91,48 @@
     gap: var(--space-small);
   }
 }
+
+#patrium-history-button {
+  list-style-image: url("chrome://browser/content/patrium/history.svg");
+}
+
+.patrium-panel .patrium-history-list {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-block: var(--space-small);
+  gap: 2px;
+}
+
+/* Show a text label beside the icon for the Tor and Zapret buttons, so the
+   whole button (icon + text) is clickable and opens the panel. */
+:is(#patrium-tor-button, #patrium-zapret-button) .toolbarbutton-text {
+  display: flex !important;
+  margin-inline-start: 6px;
+  font-weight: 500;
+}
+
+/* Minimalist panel polish */
+.patrium-panel .panel-subview-body {
+  padding: 12px 14px;
+  gap: 10px;
+  min-width: 260px;
+}
+.patrium-panel .patrium-status {
+  font-size: 1.05em;
+}
+.patrium-panel .patrium-status-dot {
+  width: 8px;
+  height: 8px;
+}
+.patrium-panel .patrium-action {
+  border-radius: var(--border-radius-medium, 6px);
+  padding-block: 7px;
+}
+.patrium-panel .patrium-note,
+.patrium-panel .patrium-detail {
+  opacity: 0.75;
+  line-height: 1.35;
+}
+.patrium-panel .patrium-option {
+  margin-block: 2px;
+}

@@ -10,6 +10,7 @@ MOZ_SRC_FILES += [
     "PatriumAdblockParent.sys.mjs",
     "PatriumDownloader.sys.mjs",
     "PatriumGlue.sys.mjs",
+    "PatriumHistory.sys.mjs",
     "PatriumMemory.sys.mjs",
     "PatriumTor.sys.mjs",
     "PatriumUI.sys.mjs",

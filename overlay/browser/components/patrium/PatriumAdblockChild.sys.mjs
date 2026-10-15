@@ -127,21 +127,39 @@ export class PatriumAdblockChild extends JSWindowActorChild {
     this.#pending = [];
     let i = 0;
     for (; i < nodes.length && budget > 0; i++) {
-      const { el, deep } = nodes[i];
-      collect(el);
-      budget--;
-      if (deep) {
-        for (const child of el.querySelectorAll?.("[class],[id]") ?? []) {
-          if (--budget <= 0) {
+      const entry = nodes[i];
+      const from = entry.from ?? 0;
+      if (from == 0) {
+        collect(entry.el);
+        budget--;
+      }
+      if (entry.deep) {
+        if (budget <= 0) {
+          // Out of budget before scanning the subtree; resume it next tick.
+          this.#pending.push({ el: entry.el, deep: true, from });
+          i++;
+          break;
+        }
+        const children = entry.el.querySelectorAll?.("[class],[id]");
+        if (children) {
+          let j = from;
+          for (; j < children.length && budget > 0; j++) {
+            budget--;
+            collect(children[j]);
+          }
+          if (j < children.length) {
+            // Resume mid-subtree next tick so we always make forward progress.
+            this.#pending.push({ el: entry.el, deep: true, from: j });
+            i++;
             break;
           }
-          collect(child);
         }
       }
     }
-    // Anything left over this scan's budget is re-queued for the next tick.
     if (i < nodes.length) {
       this.#pending.push(...nodes.slice(i));
+    }
+    if (this.#pending.length) {
       this.#scheduleScan();
     }
 
@@ -175,8 +193,11 @@ export class PatriumAdblockChild extends JSWindowActorChild {
     if (!added) {
       return;
     }
-    const css =
-      [...this.#selectors].join(",\n") + " { display: none !important; }";
+    // One rule per selector: a single invalid selector only drops its own
+    // rule, not the whole combined list.
+    const css = [...this.#selectors]
+      .map(s => `${s} { display: none !important; }`)
+      .join("\n");
     const utils = this.contentWindow.windowUtils;
     const uri = "data:text/css;charset=utf-8," + encodeURIComponent(css);
     try {

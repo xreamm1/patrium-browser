@@ -133,7 +133,7 @@ class PatriumZapretClass {
   }
 
   async init() {
-    await this.refresh();
+    await this.#refreshState();
   }
 
   async isInstalled() {
@@ -156,7 +156,17 @@ class PatriumZapretClass {
     return output.match(SC_STATE)?.[1] ?? "UNKNOWN";
   }
 
+  // Public entry: skip while an operation is in flight, so opening the panel
+  // can't wipe a state that start()/stop() is mid-managing.
   async refresh() {
+    if (this.#busy) {
+      return;
+    }
+    await this.#refreshState();
+  }
+
+  // Internal: always recompute, used by the operations themselves.
+  async #refreshState() {
     if (!(await this.isInstalled())) {
       this.#setState("missing");
       return;
@@ -209,9 +219,11 @@ class PatriumZapretClass {
       if (
         this.version &&
         this.compareTags(release.tag_name, this.version) <= 0 &&
-        (await this.isInstalled())
+        (await this.isInstalled()) &&
+        this.#stagingDir &&
+        (await IOUtils.exists(this.#stagingDir))
       ) {
-        await this.refresh(); // Already up to date.
+        await this.#refreshState(); // Already up to date.
         return;
       }
       const asset = release.assets.find(a => a.name.endsWith(".zip"));
@@ -251,7 +263,7 @@ class PatriumZapretClass {
           console.error
         );
       }
-      await this.refresh();
+      await this.#refreshState();
       if (wasRunning) {
         this.#busy = false;
         await this.start(); // Redeploy the new version and restart.
@@ -370,6 +382,20 @@ class PatriumZapretClass {
     if (!sid) {
       throw new Error("Could not determine the current user SID");
     }
+    // Re-verify the archive against its download-time (GitHub) hash right
+    // before elevation. The elevated step then copies it into the admin-only
+    // directory and re-hashes that copy, so it cannot be swapped in between.
+    const expectedSha = Services.prefs
+      .getStringPref(PREF_ZIP_SHA, "")
+      .toLowerCase();
+    const actualSha = await lazy.PatriumDownloader.sha256Hex(
+      await IOUtils.read(this.#zipPath)
+    );
+    if (!expectedSha || actualSha != expectedSha) {
+      // Force a fresh download next time rather than looping on "up to date".
+      Services.prefs.clearUserPref(PREF_VERSION);
+      throw new Error("The zapret archive failed its integrity check");
+    }
     // SYSTEM & Administrators: full control. The installing user: start/stop
     // and query only (no reconfigure/delete). No access for anyone else.
     const sddl =
@@ -389,28 +415,39 @@ class PatriumZapretClass {
     const script = [
       "$ErrorActionPreference = 'Stop'",
       `$zip = ${q(this.#zipPath)}`,
-      `$sha = ${q(Services.prefs.getStringPref(PREF_ZIP_SHA, ""))}`,
+      `$sha = ${q(expectedSha)}`,
       `$pf = ${q(pf)}`,
       `$svc = ${q(svcDir)}`,
       `$name = ${q(SERVICE_NAME)}`,
-      "# Re-verify the archive against the upstream hash before trusting it.",
-      "if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash -ne $sha.ToUpper()) { exit 3 }",
+      "$sc = Join-Path $env:SystemRoot 'System32\\sc.exe'",
       "$tar = Join-Path $env:SystemRoot 'System32\\tar.exe'",
+      "$root = Split-Path $pf -Parent",
+      "New-Item -ItemType Directory -Force -Path $root | Out-Null",
+      // Copy into the admin-only directory, then hash and extract THAT copy so
+      // the archive cannot be swapped between verification and extraction.
+      "$incoming = Join-Path $root 'incoming.zip'",
+      "Copy-Item -LiteralPath $zip -Destination $incoming -Force",
+      "if ((Get-FileHash -Algorithm SHA256 -LiteralPath $incoming).Hash -ne $sha.ToUpper()) { Remove-Item -LiteralPath $incoming -Force -ErrorAction SilentlyContinue; exit 3 }",
       "if (Get-Service -Name $name -ErrorAction SilentlyContinue) {",
-      "  & $env:SystemRoot\\System32\\sc.exe stop $name | Out-Null",
-      "  Start-Sleep -Milliseconds 800",
-      "  & $env:SystemRoot\\System32\\sc.exe delete $name | Out-Null",
-      "  Start-Sleep -Milliseconds 800",
+      "  & $sc stop $name | Out-Null",
+      "  for ($i=0; $i -lt 30; $i++) { if ((& $sc query $name) -match 'STOPPED') { break }; Start-Sleep -Milliseconds 500 }",
+      "  Get-Process winws -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue",
+      "  Get-Process winws -ErrorAction SilentlyContinue | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue",
+      "  & $sc delete $name | Out-Null",
+      "  Start-Sleep -Milliseconds 500",
       "}",
-      "if (Test-Path $pf) { Remove-Item -LiteralPath $pf -Recurse -Force }",
+      // winws/WinDivert may hold the files briefly; retry the cleanup.
+      "for ($i=0; $i -lt 10; $i++) { try { if (Test-Path $pf) { Remove-Item -LiteralPath $pf -Recurse -Force }; break } catch { Start-Sleep -Milliseconds 500 } }",
       "New-Item -ItemType Directory -Force -Path $pf | Out-Null",
-      "& $tar -xf $zip -C $pf",
-      "if ($LASTEXITCODE -ne 0) { exit 4 }",
+      "& $tar -xf $incoming -C $pf",
+      "$extract = $LASTEXITCODE",
+      "Remove-Item -LiteralPath $incoming -Force -ErrorAction SilentlyContinue",
+      "if ($extract -ne 0) { exit 4 }",
       "$lists = Join-Path $svc 'lists'",
       "New-Item -ItemType Directory -Force -Path $lists | Out-Null",
       listWrites,
       `New-Service -Name $name -BinaryPathName ${q(binPath)} -DisplayName 'Patrium Zapret' -StartupType Manual -Description 'zapret-discord-youtube (Flowseal) managed by Patrium' | Out-Null`,
-      `& $env:SystemRoot\\System32\\sc.exe sdset $name ${q(sddl)} | Out-Null`,
+      `& $sc sdset $name ${q(sddl)} | Out-Null`,
       "if ($LASTEXITCODE -ne 0) { exit 5 }",
       "# Several strategies rely on TCP timestamps, like service.bat's tcp_enable.",
       "& $env:SystemRoot\\System32\\netsh.exe interface tcp set global timestamps=enabled | Out-Null",
@@ -482,7 +519,7 @@ class PatriumZapretClass {
           if (result.error) {
             this.#setState("error", result.error);
           } else {
-            await this.refresh(); // UAC declined.
+            await this.#refreshState(); // UAC declined.
           }
           return;
         }
@@ -540,7 +577,7 @@ class PatriumZapretClass {
         ? state == "RUNNING"
         : state != "RUNNING" && state != "STOP_PENDING";
       if (settled) {
-        await this.refresh();
+        await this.#refreshState();
         return;
       }
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -548,7 +585,7 @@ class PatriumZapretClass {
     if (token != this.#pollToken) {
       return; // Superseded by a newer operation.
     }
-    await this.refresh();
+    await this.#refreshState();
     if ((this.#state == "on") != running) {
       this.#setState(
         "error",

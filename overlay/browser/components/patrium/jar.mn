@@ -4,6 +4,7 @@
 
 browser.jar:
     content/browser/patrium/patrium.css (content/patrium.css)
+    content/browser/patrium/history.svg (content/history.svg)
     content/browser/patrium/shield.svg (content/shield.svg)
     content/browser/patrium/tor.svg (content/tor.svg)
     content/browser/patrium/zapret.svg (content/zapret.svg)

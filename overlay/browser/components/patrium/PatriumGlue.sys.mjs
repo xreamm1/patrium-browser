@@ -6,6 +6,7 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   PatriumAdblock: "moz-src:///browser/components/patrium/PatriumAdblock.sys.mjs",
+  PatriumHistory: "moz-src:///browser/components/patrium/PatriumHistory.sys.mjs",
   PatriumMemory: "moz-src:///browser/components/patrium/PatriumMemory.sys.mjs",
   PatriumTor: "moz-src:///browser/components/patrium/PatriumTor.sys.mjs",
   PatriumUI: "moz-src:///browser/components/patrium/PatriumUI.sys.mjs",
@@ -23,6 +24,7 @@ export const PatriumGlue = {
       Services.prefs.setBoolPref(PREF_FIRST_RUN_DONE, true);
     }
     lazy.PatriumUI.init();
+    lazy.PatriumHistory.init();
     for (const service of [
       lazy.PatriumAdblock,
       lazy.PatriumMemory,

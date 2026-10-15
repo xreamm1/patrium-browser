@@ -2,7 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { clearInterval, setInterval } from "resource://gre/modules/Timer.sys.mjs";
+import {
+  clearInterval,
+  setInterval,
+  setTimeout,
+} from "resource://gre/modules/Timer.sys.mjs";
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const lazy = {};
@@ -171,7 +175,11 @@ export const PatriumMemory = {
           try {
             // Persist the latest form data etc. before discarding, so nothing
             // typed into the page is lost when it reloads.
-            await lazy.TabStateFlusher.flush(tab.linkedBrowser);
+            // Don't let a hung content process wedge unloading forever.
+            await Promise.race([
+              lazy.TabStateFlusher.flush(tab.linkedBrowser),
+              new Promise(resolve => setTimeout(resolve, 3000)),
+            ]);
             if (this.isUnloadable(tab, cutoff)) {
               gBrowser.discardBrowser(tab);
             }

@@ -185,7 +185,8 @@ export const PatriumDownloader = {
       "whoami.exe"
     );
     const { output } = await this.run(whoami, ["/user", "/fo", "list"]);
-    return output.match(/S-1-5-21-[\d-]+/)?.[0] ?? null;
+    // Matches classic (S-1-5-21-...) and Azure AD / Entra (S-1-12-1-...) SIDs.
+    return output.match(/S-1-\d+(?:-\d+)+/)?.[0] ?? null;
   },
 
   async isProcessRunning(imageName) {

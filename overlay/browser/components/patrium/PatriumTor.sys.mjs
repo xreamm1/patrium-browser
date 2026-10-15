@@ -54,6 +54,7 @@ class PatriumTorClass {
   #proc = null;
   #listeners = new Set();
   #stopping = false;
+  #startToken = 0;
 
   get state() {
     return this.#state;
@@ -65,6 +66,13 @@ class PatriumTorClass {
 
   get progress() {
     return this.#progress;
+  }
+
+  // True whenever the browser's traffic is routed through Tor's proxy,
+  // including a failed-closed state after a crash. The UI uses this to keep a
+  // "Disconnect" action available so the user is never stuck offline.
+  get routing() {
+    return Services.prefs.prefHasUserValue(PREF_SAVED_PROXY);
   }
 
   get installedDir() {
@@ -270,6 +278,11 @@ class PatriumTorClass {
       return;
     }
     this.#progress = 0;
+    this.#stopping = false;
+    const token = ++this.#startToken;
+    // We still own proxy/state only if no stop() or newer start() has bumped
+    // the token. If superseded, the other call owns them — we just bow out.
+    const current = () => token == this.#startToken && !this.#stopping;
     this.#setState("starting");
     try {
       const torExe = await lazy.PatriumDownloader.findFile(
@@ -280,19 +293,29 @@ class PatriumTorClass {
         throw new Error("tor.exe not found in the Tor bundle");
       }
       const torrc = await this.#buildTorrc(torExe);
-      this.#stopping = false;
+      if (!current()) {
+        return; // stop() already restored; a newer start() owns the proxy.
+      }
       // Fail closed: route through Tor from the moment it is enabled, so
       // traffic cannot leak directly while bootstrapping or if tor dies.
       this.#applyProxy();
-      this.#proc = await lazy.Subprocess.call({
+      const proc = await lazy.Subprocess.call({
         command: torExe,
         arguments: ["-f", torrc],
         workdir: PathUtils.parent(torExe),
         stderr: "stdout",
       });
+      if (!current()) {
+        proc.kill(); // Abandon this launch; don't touch proxy/state.
+        return;
+      }
+      this.#proc = proc;
       this.#readOutput(this.#proc);
     } catch (e) {
       console.error("Patrium: failed to start Tor", e);
+      if (!current()) {
+        return; // A newer stop()/start() owns proxy and state now.
+      }
       this.#proc = null;
       this.#restoreProxy();
       this.#setState("error", e.message);
@@ -338,6 +361,7 @@ class PatriumTorClass {
 
   async stop() {
     this.#stopping = true;
+    this.#startToken++; // Supersede any in-flight start().
     this.#restoreProxy();
     if (this.#proc) {
       this.#proc.kill();
@@ -347,9 +371,16 @@ class PatriumTorClass {
   }
 
   async toggle() {
-    if (this.#state == "on" || this.#state == "starting") {
+    // If the proxy is applied (on, connecting, or failed-closed after a crash)
+    // a toggle should tear it down; only start when nothing is routed.
+    if (
+      this.#state == "on" ||
+      this.#state == "starting" ||
+      (this.#state == "error" &&
+        Services.prefs.prefHasUserValue(PREF_SAVED_PROXY))
+    ) {
       await this.stop();
-    } else if (this.#state == "off" || this.#state == "error") {
+    } else {
       await this.start();
     }
   }

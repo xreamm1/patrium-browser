@@ -1,0 +1,93 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#patrium-zapret-button {
+  list-style-image: url("chrome://browser/content/patrium/zapret.svg");
+}
+
+#patrium-tor-button {
+  list-style-image: url("chrome://browser/content/patrium/tor.svg");
+}
+
+#patrium-adblock-button {
+  list-style-image: url("chrome://browser/content/patrium/shield.svg");
+}
+
+:is(#patrium-zapret-button, #patrium-tor-button, #patrium-adblock-button) {
+  &[patrium-state="on"] .toolbarbutton-icon {
+    fill: var(--icon-color-success);
+  }
+
+  &:is([patrium-state="starting"], [patrium-state="stopping"], [patrium-state="installing"]) .toolbarbutton-icon {
+    fill: var(--icon-color-warning);
+  }
+
+  &[patrium-state="error"] .toolbarbutton-icon {
+    fill: var(--icon-color-critical);
+  }
+
+  &[patrium-state="paused"] .toolbarbutton-icon {
+    fill-opacity: 0.4;
+  }
+}
+
+.patrium-panel {
+  .panel-subview-body {
+    padding: var(--space-medium);
+    gap: var(--space-small);
+  }
+
+  .patrium-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-small);
+    font-size: var(--font-size-large);
+    font-weight: var(--font-weight-bold);
+  }
+
+  .patrium-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: var(--icon-color);
+    opacity: 0.4;
+  }
+
+  &[patrium-state="on"] .patrium-status-dot {
+    background-color: var(--icon-color-success);
+    opacity: 1;
+  }
+
+  &:is([patrium-state="starting"], [patrium-state="stopping"], [patrium-state="installing"]) .patrium-status-dot {
+    background-color: var(--icon-color-warning);
+    opacity: 1;
+  }
+
+  &[patrium-state="error"] .patrium-status-dot {
+    background-color: var(--icon-color-critical);
+    opacity: 1;
+  }
+
+  .patrium-detail,
+  .patrium-note {
+    margin: 0;
+    max-width: 22em;
+    color: var(--text-color-deemphasized);
+    font-size: var(--font-size-small);
+    overflow-wrap: anywhere;
+  }
+
+  .patrium-detail:empty {
+    display: none;
+  }
+
+  .patrium-action {
+    justify-content: center;
+    font-weight: var(--font-weight-bold);
+  }
+
+  .patrium-option {
+    gap: var(--space-small);
+  }
+}

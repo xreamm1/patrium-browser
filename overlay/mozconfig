@@ -1,0 +1,26 @@
+# Patrium build configuration
+
+ac_add_options --with-branding=browser/branding/patrium
+ac_add_options --with-app-name=patrium
+# Own profile directory (%APPDATA%\Mozilla\Patrium), never the user's Firefox profiles
+ac_add_options --with-app-basename=Patrium
+
+# Optimized release-style build, no debug symbols to save time and disk
+ac_add_options --enable-optimize
+ac_add_options --disable-debug
+ac_add_options --disable-debug-symbols
+ac_add_options --disable-tests
+
+# No Mozilla update/crash/telemetry infrastructure
+ac_add_options --disable-updater
+ac_add_options --disable-maintenance-service
+ac_add_options --disable-crashreporter
+ac_add_options --disable-default-browser-agent
+
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-patrium
+
+# Russian localization (mozilla-l10n/firefox-l10n, ru only) for installers-ru
+ac_add_options --with-l10n-base=C:/patrium/l10n
+
+# 16 GB RAM: cap parallel jobs so Rust/linking don't exhaust memory
+mk_add_options MOZ_PARALLEL_BUILD=8

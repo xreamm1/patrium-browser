@@ -1,0 +1,18 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+JAR_MANIFESTS += ["jar.mn"]
+
+MOZ_SRC_FILES += [
+    "PatriumAdblock.sys.mjs",
+    "PatriumAdblockChild.sys.mjs",
+    "PatriumAdblockParent.sys.mjs",
+    "PatriumDownloader.sys.mjs",
+    "PatriumGlue.sys.mjs",
+    "PatriumMemory.sys.mjs",
+    "PatriumTor.sys.mjs",
+    "PatriumUI.sys.mjs",
+    "PatriumUpdater.sys.mjs",
+    "PatriumZapret.sys.mjs",
+]

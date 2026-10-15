@@ -1,0 +1,57 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+[scriptable, function, uuid(5c0f7f62-6d2e-4a8e-9f3b-7a1c2d4e5f60)]
+interface nsIPatriumAdblockCallback : nsISupports {
+  /**
+   * @param aStatus NS_OK on success.
+   * @param aError a description of the failure, empty on success.
+   */
+  void onComplete(in nsresult aStatus, in AUTF8String aError);
+};
+
+/**
+ * Native ad and tracker blocking engine (Brave's adblock-rust) for Patrium.
+ * Must be used on the main thread; heavy work runs on background threads.
+ */
+[scriptable, uuid(8a3e2b14-0c5d-4f7e-b2a9-3d6e1f0c9b72)]
+interface nsIPatriumAdblock : nsISupports {
+  readonly attribute boolean ready;
+
+  /**
+   * Parses the filter list files (ABP/uBO syntax) at aListPaths, replaces the
+   * current engine and saves it to aEnginePath. Missing files are skipped.
+   */
+  void build(in Array<AString> aListPaths,
+             in AString aEnginePath,
+             in nsIPatriumAdblockCallback aCallback);
+
+  /**
+   * Loads an engine previously saved by build().
+   */
+  void load(in AString aEnginePath, in nsIPatriumAdblockCallback aCallback);
+
+  /**
+   * @param aRequestType adblock request type, e.g. "script", "image",
+   *        "sub_frame", "xmlhttprequest".
+   */
+  boolean shouldBlock(in AUTF8String aUrl,
+                      in AUTF8String aSourceUrl,
+                      in ACString aRequestType);
+
+  /**
+   * Returns JSON {"hide": [...], "exceptions": [...], "generichide": bool}
+   * with the cosmetic filters that apply to aUrl.
+   */
+  AUTF8String cosmeticResources(in AUTF8String aUrl);
+
+  /**
+   * Returns generic hiding selectors matching the given classes and ids.
+   */
+  Array<AUTF8String> hiddenSelectors(in Array<AUTF8String> aClasses,
+                                     in Array<AUTF8String> aIds,
+                                     in Array<AUTF8String> aExceptions);
+};

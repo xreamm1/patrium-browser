@@ -31,12 +31,14 @@ const PROXY_PREFS = {
   "network.proxy.socks": "127.0.0.1",
   "network.proxy.socks_port": 0,
   "network.proxy.socks_version": 5,
-  "network.proxy.socks_remote_dns": true,
+  "network.proxy.socks_remote_dns": true, // SOCKS4 remote DNS (legacy)
+  "network.proxy.socks5_remote_dns": true, // SOCKS5 remote DNS (the one in use)
   "network.proxy.share_proxy_settings": false,
   "network.proxy.http": "",
   "network.proxy.ssl": "",
-  "network.trr.mode": 5,
+  "network.trr.mode": 5, // Disable DoH; DNS must go through Tor.
   "media.peerconnection.ice.proxy_only_if_behind_proxy": true,
+  "media.peerconnection.ice.no_host": true, // No local IP via WebRTC.
 };
 
 /**
@@ -186,26 +188,45 @@ class PatriumTorClass {
     throw new Error(`No published checksum for ${fileName}`);
   }
 
-  async #buildTorrc() {
+  // tor on Windows accepts forward slashes, and quoting handles spaces and
+  // "#" in a config value. The ClientTransportPlugin "exec" path, though, is
+  // split on whitespace with no quoting, so it must be relative to the working
+  // directory (tor.exe's folder) and therefore free of spaces.
+  #quoteTorPath(absolutePath) {
+    return `"${absolutePath.replaceAll("\\", "/")}"`;
+  }
+
+  #relativeToWorkdir(workdir, target) {
+    const w = workdir.replace(/[\\/]+$/, "");
+    if (!target.toLowerCase().startsWith(w.toLowerCase() + "\\")) {
+      return null;
+    }
+    return target.slice(w.length + 1).replaceAll("\\", "/");
+  }
+
+  async #buildTorrc(torExe) {
     const dir = this.installedDir;
+    const workdir = PathUtils.parent(torExe);
     const find = name => lazy.PatriumDownloader.findFile(dir, name);
     const dataDir = PathUtils.join(PathUtils.localProfileDir, "patrium-tor");
     await IOUtils.makeDirectory(dataDir);
 
     const lines = [
       `SocksPort 127.0.0.1:${this.socksPort}`,
-      `DataDirectory ${dataDir}`,
+      `DataDirectory ${this.#quoteTorPath(dataDir)}`,
       "ClientOnly 1",
       "AvoidDiskWrites 1",
       "Log notice stdout",
+      // Make tor exit if Patrium dies, so it never lingers holding the port.
+      `__OwningControllerProcess ${Services.appinfo.processID}`,
     ];
     const geoip = await find("geoip");
     const geoip6 = await find("geoip6");
     if (geoip) {
-      lines.push(`GeoIPFile ${geoip}`);
+      lines.push(`GeoIPFile ${this.#quoteTorPath(geoip)}`);
     }
     if (geoip6) {
-      lines.push(`GeoIPv6File ${geoip6}`);
+      lines.push(`GeoIPv6File ${this.#quoteTorPath(geoip6)}`);
     }
 
     const bridgeType = this.bridges;
@@ -215,7 +236,10 @@ class PatriumTorClass {
         throw new Error("pt_config.json not found in the Tor bundle");
       }
       const ptConfig = await IOUtils.readJSON(ptConfigPath);
-      const ptDir = PathUtils.parent(ptConfigPath) + "\\";
+      const ptDirAbs = PathUtils.parent(ptConfigPath);
+      const relPtDir = this.#relativeToWorkdir(workdir, ptDirAbs);
+      // Relative (no spaces) for the exec line; absolute fallback otherwise.
+      const ptPath = relPtDir !== null ? relPtDir + "/" : ptDirAbs + "\\";
       const bridgeKey = Object.keys(ptConfig.bridges ?? {}).find(
         key => key == bridgeType || key.startsWith(`${bridgeType}-`)
       );
@@ -227,7 +251,7 @@ class PatriumTorClass {
       for (const value of Object.values(ptConfig.pluggableTransports ?? {})) {
         lines.push(
           value
-            .replaceAll("${pt_path}", ptDir)
+            .replaceAll("${pt_path}", ptPath)
             .replaceAll("${pt_extension}", ".exe")
         );
       }
@@ -252,8 +276,14 @@ class PatriumTorClass {
         this.installedDir,
         "tor.exe"
       );
-      const torrc = await this.#buildTorrc();
+      if (!torExe) {
+        throw new Error("tor.exe not found in the Tor bundle");
+      }
+      const torrc = await this.#buildTorrc(torExe);
       this.#stopping = false;
+      // Fail closed: route through Tor from the moment it is enabled, so
+      // traffic cannot leak directly while bootstrapping or if tor dies.
+      this.#applyProxy();
       this.#proc = await lazy.Subprocess.call({
         command: torExe,
         arguments: ["-f", torrc],
@@ -264,6 +294,7 @@ class PatriumTorClass {
     } catch (e) {
       console.error("Patrium: failed to start Tor", e);
       this.#proc = null;
+      this.#restoreProxy();
       this.#setState("error", e.message);
     }
   }
@@ -282,7 +313,6 @@ class PatriumTorClass {
         if (match) {
           this.#progress = parseInt(match[1], 10);
           if (this.#progress == 100) {
-            this.#applyProxy();
             this.#setState("on");
           } else {
             this.#notify();
@@ -296,23 +326,24 @@ class PatriumTorClass {
     if (this.#proc == proc) {
       this.#proc = null;
     }
-    this.#restoreProxy();
     if (this.#stopping) {
+      this.#restoreProxy();
       this.#setState("off");
     } else {
+      // Fail closed: keep the proxy pointed at the now-dead Tor rather than
+      // letting traffic fall back to a direct connection. Disconnect restores.
       this.#setState("error", lastError ?? `tor.exe exited (${exitCode})`);
     }
   }
 
   async stop() {
-    if (!this.#proc) {
-      this.#restoreProxy();
-      this.#setState("off");
-      return;
-    }
     this.#stopping = true;
     this.#restoreProxy();
-    this.#proc.kill();
+    if (this.#proc) {
+      this.#proc.kill();
+    } else {
+      this.#setState("off");
+    }
   }
 
   async toggle() {
@@ -340,6 +371,8 @@ class PatriumTorClass {
         name == "network.proxy.socks_port" ? this.socksPort : value
       );
     }
+    // Drop sockets opened directly so nothing keeps bypassing Tor.
+    Services.obs.notifyObservers(null, "net:prune-all-connections");
   }
 
   #restoreProxy() {
@@ -360,6 +393,7 @@ class PatriumTorClass {
       }
     }
     Services.prefs.clearUserPref(PREF_SAVED_PROXY);
+    Services.obs.notifyObservers(null, "net:prune-all-connections");
   }
 
   #getPref(name) {

@@ -245,19 +245,28 @@ class ServiceWidget {
     }
 
     const installed = state != "missing" && state != "installing";
-    const busy = ["installing", "stopping", "external"].includes(state);
+    const busy =
+      this.service.busy ||
+      ["installing", "starting", "stopping"].includes(state);
+    const locked = busy || state == "external";
     view.querySelector(`#${p}-install`).hidden = installed;
     view.querySelector(`#${p}-install`).disabled = busy;
 
     const toggle = view.querySelector(`#${p}-toggle`);
     toggle.hidden = !installed;
-    toggle.disabled = busy;
+    toggle.disabled = locked;
     const isOn = state == "on" || state == "starting";
     doc.l10n.setAttributes(
       toggle,
       isOn ? `${p}-turn-off-button` : `${p}-turn-on-button`
     );
-    view.querySelector(`#${p}-option`).disabled = !installed || isOn;
+    view.querySelector(`#${p}-option`).disabled = !installed || isOn || locked;
+    for (const { id } of this.extraButtons) {
+      const button = view.querySelector(`#${p}-${id}`);
+      if (button) {
+        button.disabled = locked;
+      }
+    }
   }
 }
 

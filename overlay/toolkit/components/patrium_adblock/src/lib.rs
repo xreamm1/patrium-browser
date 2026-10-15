@@ -10,6 +10,7 @@ use nsstring::{nsACString, nsAString, nsCString, nsString};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use thin_vec::ThinVec;
 use xpcom::interfaces::{nsIPatriumAdblock, nsIPatriumAdblockCallback};
@@ -22,8 +23,10 @@ pub struct PatriumAdblock {
 
 type BuildResult = Result<Engine, String>;
 
+// Build a Windows path from the UTF-16 string without lossy replacement, so
+// paths with unpaired surrogates (rare, but possible) are preserved exactly.
 fn to_path(s: &nsAString) -> PathBuf {
-    PathBuf::from(String::from_utf16_lossy(&s[..]))
+    PathBuf::from(std::ffi::OsString::from_wide(&s[..]))
 }
 
 impl PatriumAdblock {
@@ -108,22 +111,24 @@ impl PatriumAdblock {
         Ok(())
     }
 
-    xpcom_method!(should_block => ShouldBlock(url: *const nsACString, source_url: *const nsACString, request_type: *const nsACString) -> bool);
+    xpcom_method!(should_block => ShouldBlock(url: *const nsACString, source_url: *const nsACString, request_type: *const nsACString, method: *const nsACString) -> bool);
     fn should_block(
         &self,
         url: &nsACString,
         source_url: &nsACString,
         request_type: &nsACString,
+        method: &nsACString,
     ) -> Result<bool, nsresult> {
         let engine = self.engine.borrow();
         let Some(engine) = engine.as_ref() else {
             return Ok(false);
         };
+        let method = method.to_utf8();
         let request = match Request::new(
             &url.to_utf8(),
             &source_url.to_utf8(),
             &request_type.to_utf8(),
-            "GET",
+            if method.is_empty() { "GET" } else { &method },
         ) {
             Ok(r) => r,
             Err(_) => return Ok(false),

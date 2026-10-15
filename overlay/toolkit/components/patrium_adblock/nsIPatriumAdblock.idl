@@ -40,7 +40,8 @@ interface nsIPatriumAdblock : nsISupports {
    */
   boolean shouldBlock(in AUTF8String aUrl,
                       in AUTF8String aSourceUrl,
-                      in ACString aRequestType);
+                      in ACString aRequestType,
+                      in ACString aMethod);
 
   /**
    * Returns JSON {"hide": [...], "exceptions": [...], "generichide": bool}

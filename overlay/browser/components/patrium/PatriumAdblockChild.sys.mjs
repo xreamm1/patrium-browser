@@ -8,8 +8,9 @@ const GENERIC_SCAN_DELAY_MS = 300;
 const MAX_NODES_PER_SCAN = 5000;
 
 /**
- * Hides page elements matched by cosmetic filters, using user-level style
- * sheets so that page styles cannot override them.
+ * Hides page elements matched by cosmetic filters, using a single user-level
+ * style sheet (so page styles cannot override it and repeated updates cost one
+ * restyle, not one per batch).
  */
 export class PatriumAdblockChild extends JSWindowActorChild {
   #started = false;
@@ -17,9 +18,11 @@ export class PatriumAdblockChild extends JSWindowActorChild {
   #generic = false;
   #seenClasses = new Set();
   #seenIds = new Set();
-  #pendingNodes = [];
+  #pending = []; // {el, deep}
   #scanScheduled = false;
   #observer = null;
+  #selectors = new Set();
+  #sheetUri = null;
 
   handleEvent(event) {
     switch (event.type) {
@@ -71,11 +74,12 @@ export class PatriumAdblockChild extends JSWindowActorChild {
     this.#observer = new this.contentWindow.MutationObserver(records => {
       for (const record of records) {
         if (record.type == "attributes") {
-          this.#pendingNodes.push(record.target);
+          // Only this element's class/id changed; no need to walk its subtree.
+          this.#pending.push({ el: record.target, deep: false });
         } else {
           for (const node of record.addedNodes) {
             if (node.nodeType == 1) {
-              this.#pendingNodes.push(node);
+              this.#pending.push({ el: node, deep: true });
             }
           }
         }
@@ -88,7 +92,7 @@ export class PatriumAdblockChild extends JSWindowActorChild {
       attributes: true,
       attributeFilter: ["class", "id"],
     });
-    this.#pendingNodes.push(this.document.documentElement);
+    this.#pending.push({ el: this.document.documentElement, deep: true });
     this.#scheduleScan();
   }
 
@@ -119,21 +123,28 @@ export class PatriumAdblockChild extends JSWindowActorChild {
         ids.add(el.id);
       }
     };
-    const nodes = this.#pendingNodes;
-    this.#pendingNodes = [];
-    for (const node of nodes) {
-      if (budget <= 0) {
-        break;
-      }
-      collect(node);
+    const nodes = this.#pending;
+    this.#pending = [];
+    let i = 0;
+    for (; i < nodes.length && budget > 0; i++) {
+      const { el, deep } = nodes[i];
+      collect(el);
       budget--;
-      for (const el of node.querySelectorAll?.("[class],[id]") ?? []) {
-        if (--budget <= 0) {
-          break;
+      if (deep) {
+        for (const child of el.querySelectorAll?.("[class],[id]") ?? []) {
+          if (--budget <= 0) {
+            break;
+          }
+          collect(child);
         }
-        collect(el);
       }
     }
+    // Anything left over this scan's budget is re-queued for the next tick.
+    if (i < nodes.length) {
+      this.#pending.push(...nodes.slice(i));
+      this.#scheduleScan();
+    }
+
     if (!classes.size && !ids.size) {
       return;
     }
@@ -154,15 +165,26 @@ export class PatriumAdblockChild extends JSWindowActorChild {
     if (!selectors?.length || !this.contentWindow) {
       return;
     }
-    const css = selectors
-      .map(s => `${s} { display: none !important; }`)
-      .join("\n");
+    let added = false;
+    for (const s of selectors) {
+      if (!this.#selectors.has(s)) {
+        this.#selectors.add(s);
+        added = true;
+      }
+    }
+    if (!added) {
+      return;
+    }
+    const css =
+      [...this.#selectors].join(",\n") + " { display: none !important; }";
     const utils = this.contentWindow.windowUtils;
+    const uri = "data:text/css;charset=utf-8," + encodeURIComponent(css);
     try {
-      utils.loadSheetUsingURIString(
-        "data:text/css;charset=utf-8," + encodeURIComponent(css),
-        utils.USER_SHEET
-      );
+      if (this.#sheetUri) {
+        utils.removeSheetUsingURIString(this.#sheetUri, utils.USER_SHEET);
+      }
+      utils.loadSheetUsingURIString(uri, utils.USER_SHEET);
+      this.#sheetUri = uri;
     } catch (e) {
       console.error(e);
     }

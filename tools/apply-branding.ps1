@@ -56,6 +56,16 @@ $redraw = @(
 </svg>
 '@ | Set-Content -Encoding UTF8 "$B\content\about-logo.svg"
 
+# Wordmark shown on the new tab page (chrome://branding/content/firefox-wordmark.svg)
+@'
+<svg xmlns="http://www.w3.org/2000/svg" fill="context-fill light-dark(#20123a, #fbfbfe)" viewBox="0 0 330 99">
+    <style>
+        :root { color-scheme: light dark }
+    </style>
+    <text x="0" y="78" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-weight="700" font-size="86" letter-spacing="-2">Patrium</text>
+</svg>
+'@ | Set-Content -Encoding UTF8 "$B\content\firefox-wordmark.svg"
+
 # Installer icons: NSIS wizard/uninstaller and the 7-Zip self-extractor stub
 Copy-Item "$Assets\patrium.ico" "$Src\toolkit\mozapps\installer\windows\nsis\setup.ico" -Force
 & "$PSScriptRoot\set-sfx-icon.ps1" -Source "$Src\other-licenses\7zstub\firefox\7zSD.Win32.sfx" `

@@ -215,6 +215,25 @@ index 8e0c6483d6..2f0ce82da6 100644
    <link rel="localization" href="toolkit/branding/brandings.ftl"/>
    <link rel="localization" href="toolkit/firefoxlabs/features.ftl"/>
    <link rel="localization" href="toolkit/global/mozPageHeader.ftl"/>
+diff --git a/browser/installer/windows/nsis/uninstaller.nsi b/browser/installer/windows/nsis/uninstaller.nsi
+index 7a39e2f813..8b1edab49e 100755
+--- a/browser/installer/windows/nsis/uninstaller.nsi
++++ b/browser/installer/windows/nsis/uninstaller.nsi
+@@ -415,6 +415,14 @@ Section "Uninstall"
+   DetailPrint $(STATUS_UNINSTALL_MAIN)
+   SetDetailsPrint none
+ 
++  ; Patrium: tear down the zapret DPI-bypass service and its binaries, which
++  ; the browser deploys under Program Files on first use. The uninstaller runs
++  ; elevated, so no extra prompt is needed.
++  nsExec::Exec 'net stop PatriumZapret'
++  nsExec::Exec 'sc delete PatriumZapret'
++  RMDir /r "$PROGRAMFILES64\Patrium\zapret"
++  RMDir "$PROGRAMFILES64\Patrium"
++
+   ; Some system cleanup is most easily handled when XPCOM functionality is
+   ; available - e.g. removing notifications from Window's Action Center. We
+   ; handle this in the `uninstall` background task.
 diff --git a/browser/moz.configure b/browser/moz.configure
 index 8979a2e4e8..826515889d 100644
 --- a/browser/moz.configure

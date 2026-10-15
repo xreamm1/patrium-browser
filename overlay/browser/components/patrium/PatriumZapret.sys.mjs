@@ -14,19 +14,30 @@ ChromeUtils.defineESModuleGetters(lazy, {
 const RELEASES_API =
   "https://api.github.com/repos/Flowseal/zapret-discord-youtube/releases/latest";
 const PREF_STRATEGY = "patrium.zapret.strategy";
-const PREF_INSTALLED_DIR = "patrium.zapret.installedDir";
+const PREF_STAGING_DIR = "patrium.zapret.stagingDir"; // profile: extracted service dir
+const PREF_EXTRACT_ROOT = "patrium.zapret.extractRoot"; // profile: extract root
+const PREF_ZIP = "patrium.zapret.zip"; // profile: verified .zip
+const PREF_ZIP_SHA = "patrium.zapret.zipSha"; // upstream sha256 (hex)
 const PREF_VERSION = "patrium.zapret.version";
 const PREF_SERVICE_CONFIG = "patrium.zapret.serviceConfig";
 const PROCESS_NAME = "winws.exe";
 const SERVICE_NAME = "PatriumZapret";
-const SETUP_SCRIPT = "patrium-service-setup.ps1";
 
-// Lets non-admin users query, start and stop the service, but not change it.
-const SERVICE_SDDL =
-  "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLORPWPRC;;;AU)";
+// State tokens sc.exe reports. They are NOT localized, unlike the field labels
+// around them, so we match the token directly instead of the "STATE:" label.
+const SC_STATE =
+  /\b(STOPPED|START_PENDING|STOP_PENDING|RUNNING|CONTINUE_PENDING|PAUSE_PENDING|PAUSED)\b/;
 
 const ERROR_SERVICE_ALREADY_RUNNING = 1056;
 const ERROR_SERVICE_NOT_ACTIVE = 1062;
+
+// Default user list files, created in the admin-only service dir. Same content
+// as service.bat's load_user_lists; winws rejects empty hostlists.
+const USER_LISTS = {
+  "ipset-exclude-user.txt": "203.0.113.113/32",
+  "list-general-user.txt": "# Never leave this file empty\ndomain.example.abc",
+  "list-exclude-user.txt": "domain.example.abc",
+};
 
 function system32(exe) {
   return PathUtils.join(Services.dirsvc.get("SysD", Ci.nsIFile).path, exe);
@@ -35,8 +46,14 @@ function system32(exe) {
 /**
  * Manages Flowseal's zapret-discord-youtube (winws.exe + WinDivert), a
  * system-wide DPI circumvention tool, as the Windows service PatriumZapret.
- * Creating or reconfiguring the service needs one UAC prompt; starting and
- * stopping it afterwards does not.
+ *
+ * Security model: the service binaries live under %ProgramFiles%\Patrium
+ * (writable only by administrators), deployed by an elevated PowerShell step
+ * that re-verifies the downloaded archive against its upstream SHA-256. The
+ * service may be started and stopped without elevation, but only by the user
+ * who installed it (its SDDL grants start/stop to that user's SID alone), so
+ * a non-admin process cannot swap the binary and have the service run it as
+ * SYSTEM. Creating or reconfiguring the service needs one UAC prompt.
  *
  * States: "missing", "installing", "off", "starting", "on", "stopping",
  * "external" (winws.exe runs outside our service), "error".
@@ -45,7 +62,8 @@ class PatriumZapretClass {
   #state = "off";
   #error = null;
   #listeners = new Set();
-  #pollTimer = null;
+  #pollToken = 0;
+  #busy = false;
 
   get state() {
     return this.#state;
@@ -55,8 +73,8 @@ class PatriumZapretClass {
     return this.#error;
   }
 
-  get installedDir() {
-    return Services.prefs.getStringPref(PREF_INSTALLED_DIR, "");
+  get busy() {
+    return this.#busy;
   }
 
   get version() {
@@ -71,6 +89,20 @@ class PatriumZapretClass {
     Services.prefs.setStringPref(PREF_STRATEGY, value);
   }
 
+  get #stagingDir() {
+    return Services.prefs.getStringPref(PREF_STAGING_DIR, "");
+  }
+
+  get #zipPath() {
+    return Services.prefs.getStringPref(PREF_ZIP, "");
+  }
+
+  get #programFilesDir() {
+    const pf =
+      Services.env.get("ProgramFiles") || "C:\\Program Files";
+    return PathUtils.join(pf, "Patrium", "zapret", "current");
+  }
+
   addListener(fn) {
     this.#listeners.add(fn);
   }
@@ -82,13 +114,22 @@ class PatriumZapretClass {
   #setState(state, error = null) {
     this.#state = state;
     this.#error = error;
+    this.#notify();
+  }
+
+  #notify() {
     for (const fn of this.#listeners) {
       try {
-        fn(state);
+        fn(this.#state);
       } catch (e) {
         console.error(e);
       }
     }
+  }
+
+  #setBusy(value) {
+    this.#busy = value;
+    this.#notify();
   }
 
   async init() {
@@ -96,15 +137,13 @@ class PatriumZapretClass {
   }
 
   async isInstalled() {
-    const dir = this.installedDir;
-    return (
-      !!dir && (await IOUtils.exists(PathUtils.join(dir, "bin", PROCESS_NAME)))
-    );
+    const zip = this.#zipPath;
+    return !!zip && (await IOUtils.exists(zip));
   }
 
   /**
-   * @returns {Promise<string|null>} the service state reported by sc.exe
-   *   (e.g. "RUNNING", "STOPPED"), or null if the service does not exist.
+   * @returns {Promise<string|null>} the service state token (e.g. "RUNNING",
+   *   "STOPPED"), or null if the service does not exist.
    */
   async serviceState() {
     const { exitCode, output } = await lazy.PatriumDownloader.run(
@@ -112,9 +151,9 @@ class PatriumZapretClass {
       ["query", SERVICE_NAME]
     );
     if (exitCode != 0) {
-      return null;
+      return null; // 1060: the service does not exist.
     }
-    return output.match(/STATE\s*:\s*\d+\s+(\w+)/)?.[1] ?? "UNKNOWN";
+    return output.match(SC_STATE)?.[1] ?? "UNKNOWN";
   }
 
   async refresh() {
@@ -133,8 +172,8 @@ class PatriumZapretClass {
   }
 
   async listStrategies() {
-    const dir = this.installedDir;
-    if (!dir) {
+    const dir = this.#stagingDir;
+    if (!dir || !(await IOUtils.exists(dir))) {
       return [];
     }
     const children = await IOUtils.getChildren(dir);
@@ -148,65 +187,98 @@ class PatriumZapretClass {
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }
 
+  async latestVersion() {
+    const release = await lazy.PatriumDownloader.fetchJSON(RELEASES_API);
+    return release.tag_name;
+  }
+
   /**
-   * Downloads the latest release, verifying the SHA-256 digest that GitHub
-   * publishes for the release asset.
+   * Downloads the latest release (verified against the SHA-256 GitHub
+   * publishes), keeps the archive, and extracts a read-only staging copy used
+   * to list strategies and build the service command line.
    */
   async install() {
+    if (this.#busy) {
+      return;
+    }
+    this.#busy = true;
     const wasRunning = this.#state == "on";
     this.#setState("installing");
     try {
       const release = await lazy.PatriumDownloader.fetchJSON(RELEASES_API);
+      if (
+        this.version &&
+        this.compareTags(release.tag_name, this.version) <= 0 &&
+        (await this.isInstalled())
+      ) {
+        await this.refresh(); // Already up to date.
+        return;
+      }
       const asset = release.assets.find(a => a.name.endsWith(".zip"));
       if (!asset?.digest?.startsWith("sha256:")) {
         throw new Error("Release has no zip asset with a sha256 digest");
       }
-      const toolsDir = PathUtils.join(
-        lazy.PatriumDownloader.toolsDir,
-        "zapret"
-      );
-      const archive = PathUtils.join(toolsDir, asset.name);
+      const sha = asset.digest.slice("sha256:".length).toLowerCase();
+      const toolsDir = PathUtils.join(lazy.PatriumDownloader.toolsDir, "zapret");
+      const zip = PathUtils.join(toolsDir, asset.name);
       await lazy.PatriumDownloader.downloadVerified(
         asset.browser_download_url,
-        archive,
-        asset.digest.slice("sha256:".length)
+        zip,
+        sha
       );
-      const extractDir = PathUtils.join(toolsDir, release.tag_name);
-      if (PathUtils.parent(this.installedDir) != extractDir) {
-        await IOUtils.remove(extractDir, {
-          recursive: true,
-          ignoreAbsent: true,
-        });
-      }
-      await lazy.PatriumDownloader.extract(archive, extractDir);
-      await IOUtils.remove(archive);
 
+      const extractRoot = PathUtils.join(toolsDir, "staging");
+      await IOUtils.remove(extractRoot, { recursive: true, ignoreAbsent: true });
+      await lazy.PatriumDownloader.extract(zip, extractRoot);
       const serviceBat = await lazy.PatriumDownloader.findFile(
-        extractDir,
+        extractRoot,
         "service.bat"
       );
       if (!serviceBat) {
         throw new Error("Unexpected archive layout: service.bat not found");
       }
-      Services.prefs.setStringPref(
-        PREF_INSTALLED_DIR,
-        PathUtils.parent(serviceBat)
-      );
+
+      // Drop any older archive once the new one is staged.
+      const oldZip = this.#zipPath;
+      Services.prefs.setStringPref(PREF_ZIP, zip);
+      Services.prefs.setStringPref(PREF_ZIP_SHA, sha);
       Services.prefs.setStringPref(PREF_VERSION, release.tag_name);
+      Services.prefs.setStringPref(PREF_EXTRACT_ROOT, extractRoot);
+      Services.prefs.setStringPref(PREF_STAGING_DIR, PathUtils.parent(serviceBat));
+      Services.prefs.clearUserPref(PREF_SERVICE_CONFIG); // Force redeploy.
+      if (oldZip && oldZip != zip) {
+        await IOUtils.remove(oldZip, { ignoreAbsent: true }).catch(
+          console.error
+        );
+      }
       await this.refresh();
       if (wasRunning) {
-        // The service still points at the previous version; start() moves it.
-        await this.start();
+        this.#busy = false;
+        await this.start(); // Redeploy the new version and restart.
       }
     } catch (e) {
       console.error("Patrium: zapret install failed", e);
       this.#setState("error", e.message);
+    } finally {
+      this.#setBusy(false);
     }
   }
 
-  async latestVersion() {
-    const release = await lazy.PatriumDownloader.fetchJSON(RELEASES_API);
-    return release.tag_name;
+  compareTags(a, b) {
+    const parse = v =>
+      String(v)
+        .replace(/^v/i, "")
+        .split(/[.-]/)
+        .map(n => parseInt(n, 10) || 0);
+    const pa = parse(a);
+    const pb = parse(b);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+      if (d) {
+        return d;
+      }
+    }
+    return 0;
   }
 
   async #gameFilter(dir) {
@@ -238,12 +310,14 @@ class PatriumZapretClass {
   }
 
   /**
-   * Turns a strategy .bat into the winws.exe command line used as the
-   * service binPath, with every path made absolute.
+   * Turns a strategy .bat (read from the read-only staging copy) into the
+   * winws.exe command line, with every path pointing at the admin-only
+   * service directory `targetDir` where the binaries will be deployed.
    */
-  async buildServiceCommand(strategy) {
-    const dir = this.installedDir;
-    const text = await IOUtils.readUTF8(PathUtils.join(dir, strategy));
+  async buildServiceCommand(strategy, targetDir) {
+    const text = await IOUtils.readUTF8(
+      PathUtils.join(this.#stagingDir, strategy)
+    );
     const lines = text.split(/\r?\n/);
     const start = lines.findIndex(l => /winws\.exe/i.test(l));
     if (start == -1) {
@@ -261,10 +335,10 @@ class PatriumZapretClass {
     command = command.replace(/^.*?winws\.exe"?/i, "").trim();
 
     const vars = {
-      BIN: PathUtils.join(dir, "bin") + "\\",
-      LISTS: PathUtils.join(dir, "lists") + "\\",
-      "~dp0": dir + "\\",
-      ...(await this.#gameFilter(dir)),
+      BIN: PathUtils.join(targetDir, "bin") + "\\",
+      LISTS: PathUtils.join(targetDir, "lists") + "\\",
+      "~dp0": targetDir + "\\",
+      ...(await this.#gameFilter(this.#stagingDir)),
     };
     command = command.replace(/%(~dp0|[A-Za-z_][A-Za-z0-9_]*)%?/g, (m, name) => {
       const key = Object.keys(vars).find(
@@ -276,77 +350,94 @@ class PatriumZapretClass {
     if (unresolved) {
       throw new Error(`${strategy}: unknown variable ${unresolved[0]}`);
     }
-    return `"${PathUtils.join(dir, "bin", PROCESS_NAME)}" ${command}`;
+    return `"${PathUtils.join(targetDir, "bin", PROCESS_NAME)}" ${command}`;
   }
 
   /**
-   * (Re)creates the PatriumZapret service for the current strategy. Needs one
-   * UAC prompt. Resolves to false if the user declined it.
+   * Deploys the verified binaries into %ProgramFiles% and (re)creates the
+   * service in one elevated step. Returns the UAC/script outcome.
    */
-  // Same defaults as service.bat's load_user_lists; winws rejects empty lists.
-  async #ensureUserLists(dir) {
-    const lists = PathUtils.join(dir, "lists");
-    const defaults = {
-      "ipset-exclude-user.txt": "203.0.113.113/32\r\n",
-      "list-general-user.txt": "# Never leave this file empty\r\ndomain.example.abc\r\n",
-      "list-exclude-user.txt": "domain.example.abc\r\n",
-    };
-    for (const [name, content] of Object.entries(defaults)) {
-      const path = PathUtils.join(lists, name);
-      if (!(await IOUtils.exists(path))) {
-        await IOUtils.writeUTF8(path, content);
-      }
-    }
-  }
-
   async configureService(strategy) {
-    const dir = this.installedDir;
-    await this.#ensureUserLists(dir);
-    const binPath = await this.buildServiceCommand(strategy);
-    const psString = s => `'${s.replace(/'/g, "''")}'`;
+    const pf = this.#programFilesDir;
+    const rel = this.#stagingDir
+      .slice(Services.prefs.getStringPref(PREF_EXTRACT_ROOT, "").length)
+      .replace(/^[\\/]+/, "");
+    const svcDir = rel
+      ? PathUtils.join(pf, ...rel.split(/[\\/]+/))
+      : pf;
+    const binPath = await this.buildServiceCommand(strategy, svcDir);
+    const sid = await lazy.PatriumDownloader.currentUserSid();
+    if (!sid) {
+      throw new Error("Could not determine the current user SID");
+    }
+    // SYSTEM & Administrators: full control. The installing user: start/stop
+    // and query only (no reconfigure/delete). No access for anyone else.
+    const sddl =
+      "D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)" +
+      "(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)" +
+      `(A;;CCLCSWRPWPLORC;;;${sid})`;
+
+    const q = s => `'${String(s).replace(/'/g, "''")}'`;
+    const listWrites = Object.entries(USER_LISTS)
+      .map(
+        ([name, content]) =>
+          `  $f = Join-Path $lists ${q(name)}; ` +
+          `if (-not (Test-Path $f)) { Set-Content -LiteralPath $f -Value ${q(content)} -Encoding ascii }`
+      )
+      .join("\n");
+
     const script = [
       "$ErrorActionPreference = 'Stop'",
-      `$name = ${psString(SERVICE_NAME)}`,
+      `$zip = ${q(this.#zipPath)}`,
+      `$sha = ${q(Services.prefs.getStringPref(PREF_ZIP_SHA, ""))}`,
+      `$pf = ${q(pf)}`,
+      `$svc = ${q(svcDir)}`,
+      `$name = ${q(SERVICE_NAME)}`,
+      "# Re-verify the archive against the upstream hash before trusting it.",
+      "if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash -ne $sha.ToUpper()) { exit 3 }",
+      "$tar = Join-Path $env:SystemRoot 'System32\\tar.exe'",
       "if (Get-Service -Name $name -ErrorAction SilentlyContinue) {",
-      "  sc.exe stop $name | Out-Null",
+      "  & $env:SystemRoot\\System32\\sc.exe stop $name | Out-Null",
       "  Start-Sleep -Milliseconds 800",
-      "  sc.exe delete $name | Out-Null",
+      "  & $env:SystemRoot\\System32\\sc.exe delete $name | Out-Null",
       "  Start-Sleep -Milliseconds 800",
       "}",
-      `New-Service -Name $name -BinaryPathName ${psString(binPath)} -DisplayName 'Patrium Zapret' -StartupType Manual -Description 'zapret-discord-youtube (Flowseal) managed by Patrium' | Out-Null`,
-      `sc.exe sdset $name ${psString(SERVICE_SDDL)} | Out-Null`,
-      "if ($LASTEXITCODE -ne 0) { exit 2 }",
-      // Several strategies rely on TCP timestamps, as service.bat's tcp_enable does.
-      "netsh interface tcp set global timestamps=enabled | Out-Null",
+      "if (Test-Path $pf) { Remove-Item -LiteralPath $pf -Recurse -Force }",
+      "New-Item -ItemType Directory -Force -Path $pf | Out-Null",
+      "& $tar -xf $zip -C $pf",
+      "if ($LASTEXITCODE -ne 0) { exit 4 }",
+      "$lists = Join-Path $svc 'lists'",
+      "New-Item -ItemType Directory -Force -Path $lists | Out-Null",
+      listWrites,
+      `New-Service -Name $name -BinaryPathName ${q(binPath)} -DisplayName 'Patrium Zapret' -StartupType Manual -Description 'zapret-discord-youtube (Flowseal) managed by Patrium' | Out-Null`,
+      `& $env:SystemRoot\\System32\\sc.exe sdset $name ${q(sddl)} | Out-Null`,
+      "if ($LASTEXITCODE -ne 0) { exit 5 }",
+      "# Several strategies rely on TCP timestamps, like service.bat's tcp_enable.",
+      "& $env:SystemRoot\\System32\\netsh.exe interface tcp set global timestamps=enabled | Out-Null",
       "exit 0",
-      "",
-    ].join("\r\n");
-    const scriptPath = PathUtils.join(dir, SETUP_SCRIPT);
-    // UTF-8 with BOM so Windows PowerShell 5.1 reads non-ASCII paths correctly.
-    await IOUtils.write(
-      scriptPath,
-      new Uint8Array([
-        0xef,
-        0xbb,
-        0xbf,
-        ...new TextEncoder().encode(script),
-      ])
-    );
-    const powershell = system32(
-      PathUtils.join("WindowsPowerShell", "v1.0", "powershell.exe")
-    );
-    const ok = await lazy.PatriumDownloader.runElevated(
-      powershell,
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { wait: true }
-    );
-    if (ok) {
-      Services.prefs.setStringPref(
-        PREF_SERVICE_CONFIG,
-        JSON.stringify({ dir, strategy })
-      );
+    ].join("\n");
+
+    const { accepted, exitCode } =
+      await lazy.PatriumDownloader.runElevatedPowerShell(script, { wait: true });
+    if (!accepted) {
+      return { ok: false, declined: true };
     }
-    return ok;
+    if (exitCode != 0) {
+      const reasons = {
+        3: "the downloaded archive failed its integrity check",
+        4: "the archive could not be extracted",
+        5: "the service permissions could not be set",
+      };
+      return {
+        ok: false,
+        error: reasons[exitCode] ?? `setup failed (code ${exitCode})`,
+      };
+    }
+    Services.prefs.setStringPref(
+      PREF_SERVICE_CONFIG,
+      JSON.stringify({ version: this.version, strategy })
+    );
+    return { ok: true };
   }
 
   #serviceMatchesSettings(strategy) {
@@ -354,21 +445,23 @@ class PatriumZapretClass {
       const config = JSON.parse(
         Services.prefs.getStringPref(PREF_SERVICE_CONFIG, "{}")
       );
-      return config.dir == this.installedDir && config.strategy == strategy;
+      return config.version == this.version && config.strategy == strategy;
     } catch {
       return false;
     }
   }
 
   async #sc(command) {
-    const { exitCode, output } = await lazy.PatriumDownloader.run(
-      system32("sc.exe"),
-      [command, SERVICE_NAME]
-    );
-    return { exitCode, output };
+    return lazy.PatriumDownloader.run(system32("sc.exe"), [
+      command,
+      SERVICE_NAME,
+    ]);
   }
 
   async start() {
+    if (this.#busy) {
+      return;
+    }
     const strategies = await this.listStrategies();
     const strategy = strategies.includes(this.strategy)
       ? this.strategy
@@ -377,14 +470,20 @@ class PatriumZapretClass {
       this.#setState("error", "No strategy files found");
       return;
     }
+    this.#busy = true;
     this.#setState("starting");
     try {
       if (
         (await this.serviceState()) === null ||
         !this.#serviceMatchesSettings(strategy)
       ) {
-        if (!(await this.configureService(strategy))) {
-          await this.refresh();
+        const result = await this.configureService(strategy);
+        if (!result.ok) {
+          if (result.error) {
+            this.#setState("error", result.error);
+          } else {
+            await this.refresh(); // UAC declined.
+          }
           return;
         }
       }
@@ -396,20 +495,35 @@ class PatriumZapretClass {
     } catch (e) {
       console.error("Patrium: failed to start zapret", e);
       this.#setState("error", e.message);
+    } finally {
+      this.#setBusy(false);
     }
   }
 
   async stop() {
-    this.#setState("stopping");
-    const { exitCode, output } = await this.#sc("stop");
-    if (exitCode != 0 && exitCode != ERROR_SERVICE_NOT_ACTIVE) {
-      this.#setState("error", `sc stop failed (${exitCode}): ${output.trim()}`);
+    if (this.#busy) {
       return;
     }
-    await this.#waitFor(false);
+    this.#busy = true;
+    this.#setState("stopping");
+    try {
+      const { exitCode, output } = await this.#sc("stop");
+      if (exitCode != 0 && exitCode != ERROR_SERVICE_NOT_ACTIVE) {
+        throw new Error(`sc stop failed (${exitCode}): ${output.trim()}`);
+      }
+      await this.#waitFor(false);
+    } catch (e) {
+      console.error("Patrium: failed to stop zapret", e);
+      this.#setState("error", e.message);
+    } finally {
+      this.#setBusy(false);
+    }
   }
 
   async toggle() {
+    if (this.#busy) {
+      return;
+    }
     if (this.#state == "on") {
       await this.stop();
     } else if (this.#state == "off" || this.#state == "error") {
@@ -418,23 +532,29 @@ class PatriumZapretClass {
   }
 
   async #waitFor(running, timeoutMs = 20000) {
-    clearTimeout(this.#pollTimer);
+    const token = ++this.#pollToken;
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && token == this.#pollToken) {
       const state = await this.serviceState();
-      if (running ? state == "RUNNING" : state != "RUNNING" && state != "STOP_PENDING") {
+      const settled = running
+        ? state == "RUNNING"
+        : state != "RUNNING" && state != "STOP_PENDING";
+      if (settled) {
         await this.refresh();
         return;
       }
-      await new Promise(resolve => {
-        this.#pollTimer = setTimeout(resolve, 500);
-      });
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    if (token != this.#pollToken) {
+      return; // Superseded by a newer operation.
     }
     await this.refresh();
     if ((this.#state == "on") != running) {
       this.#setState(
         "error",
-        running ? "The zapret service did not start" : "The zapret service did not stop"
+        running
+          ? "The zapret service did not start"
+          : "The zapret service did not stop"
       );
     }
   }

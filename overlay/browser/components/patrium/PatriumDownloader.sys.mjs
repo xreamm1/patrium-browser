@@ -2,11 +2,24 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+import { setTimeout, clearTimeout } from "resource://gre/modules/Timer.sys.mjs";
+
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   Subprocess: "resource://gre/modules/Subprocess.sys.mjs",
 });
+
+// AbortSignal.timeout is not exposed in the system-module global, so build an
+// abortable timeout from AbortController, which is.
+export function timeoutSignal(ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  controller.signal.addEventListener("abort", () => clearTimeout(timer), {
+    once: true,
+  });
+  return controller.signal;
+}
 
 /**
  * Shared helpers for the Patrium components that fetch third-party tools
@@ -17,8 +30,17 @@ export const PatriumDownloader = {
     return PathUtils.join(PathUtils.localProfileDir, "patrium-tools");
   },
 
+  // 60s network timeout so a stalled download can't wedge a flow forever.
+  fetch(url, options = {}) {
+    return fetch(url, {
+      cache: "no-store",
+      signal: timeoutSignal(60000),
+      ...options,
+    });
+  },
+
   async fetchJSON(url) {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await this.fetch(url);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} for ${url}`);
     }
@@ -26,22 +48,19 @@ export const PatriumDownloader = {
   },
 
   async fetchText(url) {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await this.fetch(url);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} for ${url}`);
     }
     return response.text();
   },
 
-  sha256Hex(bytes) {
-    const hasher = Cc["@mozilla.org/security/hash;1"].createInstance(
-      Ci.nsICryptoHash
-    );
-    hasher.init(Ci.nsICryptoHash.SHA256);
-    hasher.update(bytes, bytes.length);
-    const binary = hasher.finish(false);
-    return Array.from(binary, c =>
-      c.charCodeAt(0).toString(16).padStart(2, "0")
+  // WebCrypto hashes on a background thread, unlike nsICryptoHash on the main
+  // thread, so a large installer doesn't jank the UI.
+  async sha256Hex(bytes) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), b =>
+      b.toString(16).padStart(2, "0")
     ).join("");
   },
 
@@ -50,12 +69,12 @@ export const PatriumDownloader = {
    * expectedSha256 (lowercase hex).
    */
   async downloadVerified(url, destPath, expectedSha256) {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await this.fetch(url);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} for ${url}`);
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
-    const actual = this.sha256Hex(bytes);
+    const actual = await this.sha256Hex(bytes);
     if (actual != expectedSha256.toLowerCase()) {
       throw new Error(
         `Checksum mismatch for ${url}: expected ${expectedSha256}, got ${actual}`
@@ -103,40 +122,70 @@ export const PatriumDownloader = {
     return { exitCode, output };
   },
 
-  /**
-   * Runs an executable elevated through UAC, hidden. Without `wait`, resolves
-   * to true if the user accepted the prompt. With `wait`, resolves to true
-   * only if the elevated process also exited with code 0.
-   */
-  async runElevated(file, args = [], { workingDirectory, wait = false } = {}) {
-    const quote = s => `'${String(s).replace(/'/g, "''")}'`;
-    // Start-Process passes a single string through verbatim, so quote each
-    // argument for the Windows command line ourselves.
-    const commandLine = args
-      .map(a => (/[\s"]/.test(a) ? `"${String(a).replace(/"/g, '\\"')}"` : a))
-      .join(" ");
-    let script =
-      `$p = Start-Process -FilePath ${quote(file)} -Verb RunAs -WindowStyle Hidden -PassThru` +
-      (args.length ? ` -ArgumentList ${quote(commandLine)}` : "") +
-      (workingDirectory
-        ? ` -WorkingDirectory ${quote(workingDirectory)}`
-        : "") +
-      (wait ? " -Wait; exit $p.ExitCode" : "");
-    const powershell = PathUtils.join(
+  get powershellPath() {
+    return PathUtils.join(
       Services.dirsvc.get("SysD", Ci.nsIFile).path,
       "WindowsPowerShell",
       "v1.0",
       "powershell.exe"
     );
-    const { exitCode } = await this.run(powershell, [
+  },
+
+  // Base64 of the UTF-16LE encoding of a script, as PowerShell -EncodedCommand
+  // expects. Iterates code units so surrogate pairs survive.
+  encodePowerShell(script) {
+    let binary = "";
+    for (let i = 0; i < script.length; i++) {
+      const code = script.charCodeAt(i);
+      binary += String.fromCharCode(code & 0xff, code >> 8);
+    }
+    return btoa(binary);
+  },
+
+  /**
+   * Runs a PowerShell script elevated through a single UAC prompt, hidden.
+   * The script is passed as -EncodedCommand (no temp file on disk, so it
+   * cannot be swapped between writing it and the elevated run).
+   *
+   * @returns {Promise<{accepted: boolean, exitCode: number}>}
+   *   accepted is false when the user dismissed the UAC prompt. Otherwise
+   *   exitCode is the script's own exit code.
+   */
+  async runElevatedPowerShell(script, { wait = true } = {}) {
+    const CANCELLED = 1223; // ERROR_CANCELLED, when the UAC prompt is declined.
+    const encoded = this.encodePowerShell(script);
+    const inner =
+      `@('-NoProfile','-NonInteractive','-WindowStyle','Hidden'` +
+      `,'-ExecutionPolicy','Bypass','-EncodedCommand','${encoded}')`;
+    const launcher = [
+      "$ErrorActionPreference='Stop'",
+      "try {",
+      `  $p = Start-Process -FilePath '${this.powershellPath.replace(/'/g, "''")}'` +
+        ` -Verb RunAs -WindowStyle Hidden -PassThru${wait ? " -Wait" : ""} -ArgumentList ${inner}`,
+      wait ? "  exit $p.ExitCode" : "  exit 0",
+      "} catch {",
+      `  exit ${CANCELLED}`,
+      "}",
+    ].join("\n");
+    const { exitCode } = await this.run(this.powershellPath, [
       "-NoProfile",
       "-NonInteractive",
       "-WindowStyle",
       "Hidden",
       "-Command",
-      script,
+      launcher,
     ]);
-    return exitCode == 0;
+    return { accepted: exitCode != CANCELLED, exitCode };
+  },
+
+  // The SID of the user Firefox runs as, e.g. "S-1-5-21-...-1001".
+  async currentUserSid() {
+    const whoami = PathUtils.join(
+      Services.dirsvc.get("SysD", Ci.nsIFile).path,
+      "whoami.exe"
+    );
+    const { output } = await this.run(whoami, ["/user", "/fo", "list"]);
+    return output.match(/S-1-5-21-[\d-]+/)?.[0] ?? null;
   },
 
   async isProcessRunning(imageName) {

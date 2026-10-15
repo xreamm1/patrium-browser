@@ -87,7 +87,7 @@ patrium-adblock-lists-never = Filter lists not downloaded yet
 
 patrium-memory-tab-unload =
     .label = Unload inactive tabs to save memory
-    .description = Tabs you haven't used for 30 minutes are unloaded and reload when you return to them. Pinned tabs, tabs playing media and tabs with unsaved input are kept.
+    .description = Tabs you haven't used for a while are unloaded and reload when you return to them, keeping anything you typed. Pinned tabs, tabs playing audio or video, and active calls stay loaded.
 patrium-memory-saver =
     .label = Memory saver mode
     .description = Shares processes between sites instead of isolating each site. Uses noticeably less memory but weakens protection against Spectre-type attacks. Takes effect after a restart.

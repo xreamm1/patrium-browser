@@ -5,8 +5,7 @@ const PatriumUpdater = mod("PatriumUpdater");
 const out = {};
 
 // 1. Strategy -> service command for every Flowseal strategy (read-only).
-// A checkout of https://github.com/Flowseal/zapret-discord-youtube
-const src = Services.env.get("FLOWSEAL_SRC") || "C:\\patrium\\flowseal-src";
+const src = "C:\\Users\\patrick\\AppData\\Local\\Temp\\claude\\C--patrium\\91213953-8af0-467d-9864-056a5b5374c2\\scratchpad\\flowseal-src";
 Services.prefs.setStringPref("patrium.zapret.installedDir", src);
 const strategies = await PatriumZapret.listStrategies();
 out.strategyCount = strategies.length;

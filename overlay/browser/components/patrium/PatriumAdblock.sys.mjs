@@ -2,8 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { setTimeout } from "resource://gre/modules/Timer.sys.mjs";
+import { clearTimeout, setTimeout } from "resource://gre/modules/Timer.sys.mjs";
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+
+// AbortSignal.timeout is not available in the system-module global; build the
+// equivalent from AbortController (which is).
+function timeoutSignal(ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  controller.signal.addEventListener("abort", () => clearTimeout(timer), {
+    once: true,
+  });
+  return controller.signal;
+}
 
 const lazy = {};
 
@@ -46,6 +57,7 @@ const UPDATE_INTERVAL_S = 4 * 24 * 60 * 60;
 const FIRST_UPDATE_DELAY_MS = 30 * 1000;
 
 const REQUEST_TYPES = new Map([
+  [Ci.nsIContentPolicy.TYPE_DOCUMENT, "document"],
   [Ci.nsIContentPolicy.TYPE_SCRIPT, "script"],
   [Ci.nsIContentPolicy.TYPE_IMAGE, "image"],
   [Ci.nsIContentPolicy.TYPE_IMAGESET, "image"],
@@ -62,6 +74,8 @@ const REQUEST_TYPES = new Map([
   [Ci.nsIContentPolicy.TYPE_CSP_REPORT, "csp_report"],
 ]);
 
+XPCOMUtils.defineLazyPreferenceGetter(lazy, "enabled", PREF_ENABLED, true);
+
 /**
  * Native network and cosmetic blocking backed by adblock-rust
  * (nsIPatriumAdblock). Network requests are checked in the parent process;
@@ -71,6 +85,8 @@ class PatriumAdblockClass {
   #listeners = new Set();
   #blockedCounts = new WeakMap();
   #updating = null;
+  #ready = false;
+  #allowlist = null; // Lazily built Set, invalidated on change.
 
   get dataDir() {
     return PathUtils.join(PathUtils.localProfileDir, "patrium-adblock");
@@ -81,15 +97,26 @@ class PatriumAdblockClass {
   }
 
   get enabled() {
-    return Services.prefs.getBoolPref(PREF_ENABLED, true);
+    return lazy.enabled;
   }
 
   get lastUpdate() {
     return Services.prefs.getIntPref(PREF_LAST_UPDATE, 0);
   }
 
+  // Cached so the http-on-modify-request hot path avoids an XPCOM call per
+  // request; refreshed whenever the engine is (re)built or loaded.
   get ready() {
-    return lazy.engine.ready;
+    return this.#ready;
+  }
+
+  #refreshReady() {
+    try {
+      this.#ready = lazy.engine.ready;
+    } catch {
+      this.#ready = false;
+    }
+    return this.#ready;
   }
 
   addListener(fn) {
@@ -139,6 +166,10 @@ class PatriumAdblockClass {
       console.warn("Patrium: rebuilding adblock engine:", e);
       await this.#buildFromCache().catch(console.error);
     }
+    this.#refreshReady();
+    Services.prefs.addObserver(PREF_ALLOWLIST, () => {
+      this.#allowlist = null;
+    });
     this.#notify();
 
     const age = Date.now() / 1000 - this.lastUpdate;
@@ -171,6 +202,7 @@ class PatriumAdblockClass {
     }
     await IOUtils.makeDirectory(this.dataDir);
     await this.#call(cb => lazy.engine.build(paths, this.enginePath, cb));
+    this.#refreshReady();
   }
 
   /**
@@ -199,7 +231,10 @@ class PatriumAdblockClass {
     await Promise.all(
       FILTER_LISTS.map(async ({ id, url }) => {
         try {
-          const response = await fetch(url, { cache: "no-store" });
+          const response = await fetch(url, {
+            cache: "no-store",
+            signal: timeoutSignal(60000),
+          });
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
@@ -223,12 +258,38 @@ class PatriumAdblockClass {
     }
   }
 
+  #allowlistSet() {
+    if (!this.#allowlist) {
+      this.#allowlist = new Set(
+        Services.prefs
+          .getStringPref(PREF_ALLOWLIST, "")
+          .split(",")
+          .filter(Boolean)
+      );
+    }
+    return this.#allowlist;
+  }
+
   isAllowlisted(host) {
     if (!host) {
       return false;
     }
-    const list = Services.prefs.getStringPref(PREF_ALLOWLIST, "");
-    return list.split(",").some(h => h && (host == h || host.endsWith("." + h)));
+    const set = this.#allowlistSet();
+    if (!set.size) {
+      return false;
+    }
+    if (set.has(host)) {
+      return true;
+    }
+    // Walk parent domains: a.b.example.com -> b.example.com -> example.com.
+    let dot = host.indexOf(".");
+    while (dot != -1) {
+      if (set.has(host.slice(dot + 1))) {
+        return true;
+      }
+      dot = host.indexOf(".", dot + 1);
+    }
+    return false;
   }
 
   setAllowlisted(host, allowed) {
@@ -272,7 +333,7 @@ class PatriumAdblockClass {
   }
 
   observe(subject, topic) {
-    if (topic != "http-on-modify-request") {
+    if (topic != "http-on-modify-request" || !this.#ready || !lazy.enabled) {
       return;
     }
     const channel = subject.QueryInterface(Ci.nsIHttpChannel);
@@ -281,20 +342,37 @@ class PatriumAdblockClass {
     if (!type) {
       return;
     }
-    const principal = loadInfo.loadingPrincipal ?? loadInfo.triggeringPrincipal;
-    if (!principal || principal.isSystemPrincipal) {
+
+    const isDocument = type == "document";
+    // For a navigation the "source" is the page that triggered it; for a
+    // sub-resource it is the top document.
+    const originPrincipal = isDocument
+      ? loadInfo.triggeringPrincipal
+      : loadInfo.loadingPrincipal ?? loadInfo.triggeringPrincipal;
+    if (
+      !originPrincipal ||
+      originPrincipal.isSystemPrincipal ||
+      originPrincipal.addonId || // Never block a WebExtension's own requests.
+      originPrincipal.schemeIs?.("moz-extension")
+    ) {
       return;
     }
+
     const browsingContext = loadInfo.browsingContext;
-    if (!this.isActiveFor(browsingContext)) {
+    const host = isDocument
+      ? channel.URI.host
+      : this.topHostFor(browsingContext);
+    if (this.isAllowlisted(host)) {
       return;
     }
+
     let blocked = false;
     try {
       blocked = lazy.engine.shouldBlock(
         channel.URI.spec,
-        principal.spec,
-        type
+        originPrincipal.spec || channel.URI.spec,
+        type,
+        channel.requestMethod || "GET"
       );
     } catch (e) {
       console.error(e);
@@ -305,7 +383,7 @@ class PatriumAdblockClass {
     channel.cancel(Cr.NS_ERROR_CONTENT_BLOCKED);
 
     const browser = browsingContext?.top?.embedderElement;
-    if (browser) {
+    if (browser && !isDocument) {
       this.#blockedCounts.set(browser, this.getBlockedCount(browser) + 1);
       this.#notify(browser);
     }

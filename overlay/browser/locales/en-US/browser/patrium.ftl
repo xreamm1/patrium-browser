@@ -91,11 +91,13 @@ patrium-memory-tab-unload =
 patrium-memory-saver =
     .label = Memory saver mode
     .description = Shares processes between sites instead of isolating each site. Uses noticeably less memory but weakens protection against Spectre-type attacks. Takes effect after a restart.
+
 ## Patrium: Tor and zapret running together
 
 patrium-conflict-title = Use Tor and zapret together?
 patrium-conflict-tor-text = Zapret is on. It changes network packets for the whole system and may interfere with Tor's connection to bridges. Patrium's own traffic doesn't need zapret while Tor is on.
 patrium-conflict-zapret-text = Tor is on. Zapret changes network packets for the whole system and may interfere with Tor's connection to bridges.
+
 ## Patrium: browser updates
 
 patrium-update-available = Patrium { $version } is available.
